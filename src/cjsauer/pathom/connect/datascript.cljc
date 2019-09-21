@@ -120,7 +120,6 @@
    env]
   (let [id       (pick-ident-key config (p/entity env))
         subquery (datascript-subquery (merge env config))]
-    (println db id subquery)
     (ds/pull db subquery id)))
 
 (defn index-schema
