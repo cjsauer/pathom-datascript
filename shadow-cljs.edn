@@ -1,0 +1,7 @@
+{:deps {:aliases [:provided :dev :test]}
+
+ :builds {:cljs-test
+          {:target   :browser-test
+           :test-dir "target/test/public"
+           :devtools {:http-root "target/test/public"
+                      :http-port 8021}}}}
