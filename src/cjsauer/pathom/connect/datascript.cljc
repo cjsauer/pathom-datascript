@@ -46,7 +46,9 @@
         [good bad] (pc/split-good-bad-keys (p/entity env))
         non-datascript (keep
                         (fn [{:keys [key]}]
-                          key)
+                          (if (contains? schema-keys key)
+                            nil
+                            key))
                         (:children (eql/query->shallow-ast parent-query)))]
     (into #{}
           (mapcat (fn [key]
