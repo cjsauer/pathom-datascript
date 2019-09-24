@@ -120,7 +120,10 @@
    env]
   (let [id       (pick-ident-key config (p/entity env))
         subquery (datascript-subquery (merge env config))]
-    (ds/pull db subquery id)))
+    (try
+      (ds/pull db subquery id)
+      #?(:clj  (catch Exception e nil)
+         :cljs (catch :default e nil)))))
 
 (defn index-schema
   "Creates Pathom index from datascript schema."

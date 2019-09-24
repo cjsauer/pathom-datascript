@@ -116,10 +116,14 @@
                  p/trace-plugin]}))
 
 (deftest test-datascript-parser
-  (is (= (parser {} [{[:db/id 1] [:artist/gid :derived :out-of-band :not-found]}])
-         {[:db/id 1] {:artist/gid  100
-                      :derived     "Freddie Mercury"
-                      :out-of-band "good"
-                      :not-found   ::p/not-found
-                      }})))
+  (testing "successful parses"
+    (is (= (parser {} [{[:db/id 1] [:artist/gid :derived :out-of-band :not-found]}])
+           {[:db/id 1] {:artist/gid  100
+                        :derived     "Freddie Mercury"
+                        :out-of-band "good"
+                        :not-found   ::p/not-found
+                        }})))
+  (testing "failed parses"
+    (is (= (parser {} [{[:db/id 999999] [:does-not-exist]}])
+           {[:db/id 999999] {:does-not-exist ::p/not-found}}))))
 
