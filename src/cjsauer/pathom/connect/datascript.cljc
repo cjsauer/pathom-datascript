@@ -20,14 +20,6 @@
 
 (s/def ::schema (s/map-of keyword? ::schema-entry))
 
-(defn raw-datascript-db
-  [conn]
-  (ds/db conn))
-
-(defn db->schema
-  [db]
-  (:schema db))
-
 (defn schema->uniques
   "Return a set with the ident of the unique attributes in the schema."
   [schema]
@@ -115,15 +107,59 @@
 
 (defn datascript-resolve
   "Runs the resolver to fetch datascript data from identities."
-  [{::keys [db]
+  [{::keys [conn]
     :as    config}
    env]
-  (let [id       (pick-ident-key config (p/entity env))
+  (let [db       (ds/db conn)
+        id       (pick-ident-key config (p/entity env))
         subquery (datascript-subquery (merge env config))]
     (try
       (ds/pull db subquery id)
       #?(:clj  (catch Exception e nil)
          :cljs (catch :default e nil)))))
+
+(defn entity-subquery
+  "Using the current :query in the env, compute what part of it can be
+  delegated to datascript."
+  [{:keys [query] :as env}]
+  (let [subquery (datascript-subquery (assoc env ::p/parent-query query ::p/entity {:db/id nil}))]
+    (cond-> subquery (not (seq subquery)) (conj :db/id))))
+
+(defn query-entities
+  "Use this helper from inside a resolver to run a datascript query.
+  You must send dquery using a datalog map format. The :find section
+  of the query will be populated by this function with [[pull ?e SUB_QUERY] '...].
+  The SUB_QUERY will be computed by Pathom, considering the current user sub-query.
+  Example resolver (using Datomic mbrainz sample database):
+      (pc/defresolver artists-before-1600 [env _]
+        {::pc/output [{:artist/artists-before-1600 [:db/id]}]}
+        {:artist/artists-before-1600
+         (pcd/query-entities env
+           '{:where [[?e :artist/name ?name]
+                     [?e :artist/startYear ?year]
+                     [(< ?year 1600)]]})})
+  Notice the result binding entities must be named as `?e`.
+  Them the user can run queries like:
+      [{:artist/artists-before-1600
+        [:artist/name
+         {:artist/country
+          :not-in/datascript
+          [:country/name]}]}]
+  The sub-query will be send to datascript, filtering out unsupported keys
+  like `:not-in/datascript`."
+  [{::keys [db] :as env} dquery]
+  (let [subquery (entity-subquery env)]
+    (map first
+         (ds/q (assoc dquery :find [[(list 'pull '?e subquery)]])
+               db))))
+
+(defn query-entity
+  "Like query-entities, but returns a single result."
+  [{::keys [db] :as env} dquery]
+  (let [subquery (entity-subquery env)]
+    (ffirst
+     (ds/q (assoc dquery :find [(list 'pull '?e subquery)])
+           db))))
 
 (defn index-schema
   "Creates Pathom index from datascript schema."
@@ -146,8 +182,8 @@
            (keys schema)))}))
 
 (def registry
-  [(pc/single-attr-resolver ::conn ::db raw-datascript-db)
-   (pc/single-attr-resolver ::db ::schema db->schema)
+  [(pc/single-attr-resolver ::conn ::db ds/db)
+   (pc/single-attr-resolver ::db ::schema :schema)
    (pc/single-attr-resolver ::schema ::schema-keys #(into #{:db/id} (keys %)))
    (pc/single-attr-resolver ::schema ::schema-uniques schema->uniques)])
 
@@ -177,41 +213,3 @@
            (swap! idx* pc/merge-indexes ds-index))
          (fn [env tx]
            (parser (merge env config') tx))))}))
-
-
-
-
-;; (comment
-
-;;   (pc/defresolver out-of-band-resolver
-;;     [_ {:keys [other]}]
-;;     {::pc/input #{:other}
-;;      ::pc/output #{:out-of-band}}
-;;     {:out-of-band (inc other)})
-
-;;   (let [schema {:someId {:db/unique :db.unique/identity}
-;;                 :other {}}
-;;         conn   (ds/create-conn schema)]
-;;     (ds/transact! conn [{:someId  1
-;;                          :other 42}
-;;                         {:someId  2
-;;                          :other 100}])
-;;     (def parser
-;;       (p/parser
-;;        {::p/env     {::p/reader               [p/map-reader
-;;                                                pc/reader2
-;;                                                pc/open-ident-reader
-;;                                                p/env-placeholder-reader]
-;;                      ::p/placeholder-prefixes #{">"}}
-;;         ::p/mutate  pc/mutate
-;;         ::p/plugins [(pc/connect-plugin {::pc/register [out-of-band-resolver]})
-;;                      (datascript-connect-plugin {::conn conn})
-;;                      p/error-handler-plugin
-;;                      p/trace-plugin]}))
-;;     (def conn conn)
-;;     (index-schema {::schema schema}))
-
-
-;;   (parser {} [{[:db/id 1] [:someId :other :not-found :out-of-band]}])
-
-;;   )

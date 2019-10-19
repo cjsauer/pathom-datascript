@@ -16,10 +16,6 @@
 (deftest sanity
   (is (= 2 (inc 1))))
 
-(deftest test-db->schema
-  (is (= (pcd/db->schema (ds/db conn))
-         schema)))
-
 (deftest test-schema->uniques
   (is (= (pcd/schema->uniques schema)
          #{:artist/gid})))
@@ -90,40 +86,59 @@
   {::pc/output #{:out-of-band}}
   {:out-of-band "good"})
 
-(pc/defresolver derived-resolver
-  [_ {:artist/keys [name]}]
+(pc/defresolver greeting
+  [_ {artist-name :artist/name}]
   {::pc/input #{:artist/name}
-   ::pc/output #{:derived}}
-  {:derived (str name " Mercury")})
+   ::pc/output #{:artist/greeting}}
+  {:artist/greeting (str "Hello, " artist-name)})
 
-(ds/transact! conn [{:artist/gid 100
-                     :artist/name "Freddie"}
-                    {:artist/gid 200
-                     :artist/name "Bono"}])
-
-(def parser
-  (p/parser
-   {::p/env     {::p/reader               [p/map-reader
-                                           pc/reader2
-                                           pc/open-ident-reader
-                                           p/env-placeholder-reader]
-                 ::p/placeholder-prefixes #{">"}}
-    ::p/mutate  pc/mutate
-    ::p/plugins [(pc/connect-plugin {::pc/register [out-of-band-resolver
-                                                    derived-resolver]})
-                 (pcd/datascript-connect-plugin {::pcd/conn conn})
-                 p/error-handler-plugin
-                 p/trace-plugin]}))
+(pc/defresolver query-resolver
+  [env _]
+  {::pc/output #{:artists-starting-with-F}}
+  {:artists-starting-with-F
+   (pcd/query-entities env '{:where
+                             [[?e :artist/name ?name]
+                              [(= "F" (first ?name))]]})})
 
 (deftest test-datascript-parser
-  (testing "successful parses"
-    (is (= (parser {} [{[:db/id 1] [:artist/gid :derived :out-of-band :not-found]}])
-           {[:db/id 1] {:artist/gid  100
-                        :derived     "Freddie Mercury"
-                        :out-of-band "good"
-                        :not-found   ::p/not-found
-                        }})))
-  (testing "failed parses"
-    (is (= (parser {} [{[:db/id 999999] [:does-not-exist]}])
-           {[:db/id 999999] {:does-not-exist ::p/not-found}}))))
+  (let [conn   (ds/create-conn schema)
+        _      (ds/transact! conn [{:artist/gid  100
+                                    :artist/name "Freddie"}])
+        parser (p/parser
+                {::p/env     {::p/reader               [p/map-reader
+                                                        pc/reader2
+                                                        pc/open-ident-reader
+                                                        p/env-placeholder-reader]
+                              ::p/placeholder-prefixes #{">"}}
+                 ::p/mutate  pc/mutate
+                 ::p/plugins [(pc/connect-plugin {::pc/register [out-of-band-resolver
+                                                                 greeting
+                                                                 query-resolver]})
+                              (pcd/datascript-connect-plugin {::pcd/conn conn})
+                              p/error-handler-plugin
+                              p/trace-plugin]})]
 
+    (testing "datascript keys not directly queried are automatically sourced when depended upon"
+      (is (= (parser {} [{[:db/id 1] [:artist/gid :artist/greeting :out-of-band]}])
+             {[:db/id 1] {:artist/gid      100
+                          :artist/greeting "Hello, Freddie"
+                          :out-of-band     "good"
+                          }})))
+
+    (testing "failed parses"
+      (is (= (parser {} [{[:db/id 999999] [:does-not-exist]}])
+             {[:db/id 999999] {:does-not-exist ::p/not-found}})))
+
+    (testing "custom queries in resolvers"
+      (is (= (parser {} [:artists-starting-with-F])
+             {:artists-starting-with-F [[:db/id 1]]})))
+
+    (testing "new transactions are picked up"
+      (is (do
+            (ds/transact! conn [{:artist/gid  200
+                                 :artist/name "Bono"}])
+            (= (parser {} [{[:artist/gid 200] [:artist/gid :artist/greeting :out-of-band]}])
+               {[:artist/gid 200] {:artist/gid      200
+                                   :artist/greeting "Hello, Bono"
+                                   :out-of-band     "good"
+                                   }}))))))
